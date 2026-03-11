@@ -1,3 +1,4 @@
+![architecture diagram](architecture.png)
 Links:
 - tui lib https://github.com/rockorager/libvaxis
 - aes-128 https://mojoauth.com/encryption-decryption/aes-128-encryption--zig/#introduction-to-aes-128
