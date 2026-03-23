@@ -13,15 +13,14 @@ pub fn main() !void {
         if (deinit_status == .leak) std.testing.expect(false) catch @panic("TEST FAIL");
     }
 
-    var username: mastadon.Username = std.mem.zeroes(mastadon.Username);
-    @memcpy(username[0..14], "private_zocial");
+    var client_a = try Client.fromFile(allocator, "alice");
+    defer client_a.deinit();
+    var client_b = try Client.fromFile(allocator, "bob");
+    defer client_b.deinit();
 
-    var client: Client = try .init(allocator);
-    defer client.deinit();
+    //try client_b.dmInvite("alice");
+    //try client_a.acceptInvites();
 
-    try client.dmInvite(username);
-
-    //var stdout_buf: [1024]u8 = undefined;
-    //var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-    //const stdout = &stdout_writer.interface;
+    try client_b.saveToFile();
+    try client_a.saveToFile();
 }

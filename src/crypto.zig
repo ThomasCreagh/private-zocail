@@ -71,7 +71,6 @@ pub fn aesEncrypt(
     nonce: *[Aes128Ocb.nonce_length]u8,
     key: AesKey,
 ) void {
-    random.bytes(nonce);
     Aes128Ocb.encrypt(c, tag, m, &[_]u8{}, nonce.*, key);
 }
 
@@ -81,7 +80,7 @@ pub fn aesDecrypt(
     m: []u8,
     /// Cipher Text
     c: []const u8,
-    tag: *[Aes128Ocb.tag_length]u8,
+    tag: [Aes128Ocb.tag_length]u8,
     nonce: [Aes128Ocb.nonce_length]u8,
     key: AesKey,
 ) !void {

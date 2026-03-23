@@ -8,8 +8,7 @@ const Client = std.http.Client;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
-pub const username_legth = 30;
-pub const Username = [username_legth]u8;
+pub const Username = []const u8;
 
 pub fn authenticateUser(allocator: Allocator) ![]const u8 {
     var stdout_buf: [4096]u8 = undefined;
@@ -21,7 +20,7 @@ pub fn authenticateUser(allocator: Allocator) ![]const u8 {
     const stdin: *std.io.Reader = &stdin_reader.interface;
 
     const auth_url: []const u8 =
-        "\thttps://mastodon.cloud/oauth/authorize" ++
+        "\thttps://social.thomascreagh.com/oauth/authorize" ++
         "?client_id={s}" ++
         "&scope=read+write+push" ++
         "&redirect_uri=urn:ietf:wg:oauth:2.0:oob" ++
@@ -38,7 +37,7 @@ pub fn authenticateUser(allocator: Allocator) ![]const u8 {
     var client = Client{ .allocator = allocator };
     defer client.deinit();
 
-    const uri = try std.Uri.parse("https://mastodon.cloud/oauth/token");
+    const uri = try std.Uri.parse("https://social.thomascreagh.com/oauth/token");
 
     var request = try client.request(.POST, uri, .{
         .headers = .{
@@ -84,8 +83,8 @@ pub fn getUser(
 ) !Parsed(models.User) {
     const url_format = try std.fmt.allocPrint(
         allocator,
-        "https://mastodon.cloud/api/v1/accounts/lookup?acct={s}",
-        .{std.mem.trimRight(u8, &username, &[_]u8{0})},
+        "https://social.thomascreagh.com/api/v1/accounts/lookup?acct={s}",
+        .{username},
     );
     defer allocator.free(url_format);
 
@@ -132,11 +131,11 @@ pub fn getMessages(
     if (id) |uuid| {
         auth_url = try std.fmt.allocPrint(
             allocator,
-            "https://mastodon.cloud/api/v1/timelines/tag/private_zocial_{s}",
+            "https://social.thomascreagh.com/api/v1/timelines/tag/private_zocial_{s}",
             .{uuid.str},
         );
     } else {
-        auth_url = try allocator.dupe(u8, "https://mastodon.cloud/api/v1/timelines/tag/private_zocial_0");
+        auth_url = try allocator.dupe(u8, "https://social.thomascreagh.com/api/v1/timelines/tag/private_zocial_0");
     }
     defer allocator.free(auth_url);
 
@@ -195,7 +194,7 @@ pub fn sendMessage(
     var client = Client{ .allocator = allocator };
     defer client.deinit();
 
-    const uri = try std.Uri.parse("https://mastodon.cloud/api/v1/statuses");
+    const uri = try std.Uri.parse("https://social.thomascreagh.com/api/v1/statuses");
 
     const auth_format = try std.fmt.allocPrint(allocator, "Bearer {s}", .{access_token});
     defer allocator.free(auth_format);
@@ -228,7 +227,7 @@ pub fn setBio(
     var client = Client{ .allocator = allocator };
     defer client.deinit();
 
-    const uri = try std.Uri.parse("https://mastodon.cloud/api/v1/accounts/update_credentials");
+    const uri = try std.Uri.parse("https://social.thomascreagh.com/api/v1/accounts/update_credentials");
 
     const auth_format = try std.fmt.allocPrint(allocator, "Bearer {s}", .{access_token});
     defer allocator.free(auth_format);

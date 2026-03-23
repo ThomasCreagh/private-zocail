@@ -66,6 +66,7 @@ pub const DmInvite = struct {
         ephemeral_key: [crypto.X25519.public_length]u8,
         tag: [crypto.Aes128Ocb.tag_length]u8,
         nonce: [crypto.Aes128Ocb.nonce_length]u8,
+        id: crypto.UUID = undefined,
         encrypted: []u8,
     };
 
@@ -73,12 +74,12 @@ pub const DmInvite = struct {
         ephemeral_key: [crypto.X25519.public_length]u8,
         tag: [crypto.Aes128Ocb.tag_length]u8,
         nonce: [crypto.Aes128Ocb.nonce_length]u8,
+        id: crypto.UUID = undefined,
         decrypted: Secret,
     };
 
     pub const Secret = struct {
         label: MessageLabel = .dm_invite,
-        id: crypto.UUID = undefined,
     };
 };
 
