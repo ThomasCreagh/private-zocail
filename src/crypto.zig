@@ -1,6 +1,8 @@
 //! This module provides the cryptographic functions in the protocol
 
 const std = @import("std");
+const base32 = @import("base32.zig").standard;
+
 const crypto = std.crypto;
 pub const random = std.crypto.random;
 const Allocator = std.mem.Allocator;
@@ -9,14 +11,12 @@ pub const X25519 = crypto.dh.X25519;
 pub const HkdfSha256 = crypto.kdf.hkdf.HkdfSha256;
 pub const Ed25519 = crypto.sign.Ed25519;
 
-pub const base64 = std.base64.url_safe;
-
 pub const UUID = struct {
     pub const UUID_LENGTH: usize = 16;
-    pub const STR_LENGTH: usize = base64.Encoder.calcSize(UUID_LENGTH);
+    pub const STR_LENGTH: usize = base32.Encoder.calcSize(UUID_LENGTH);
     /// Raw key bytes
     key: [UUID_LENGTH]u8 = undefined,
-    /// Base64 reprsentation of the key
+    /// Base32 reprsentation of the key
     str: [STR_LENGTH]u8 = undefined,
 
     pub fn init() @This() {
@@ -24,7 +24,7 @@ pub const UUID = struct {
         random.bytes(&uuid.key);
 
         var buf: [STR_LENGTH]u8 = undefined;
-        const encoded = base64.Encoder.encode(&buf, &uuid.key);
+        const encoded = base32.Encoder.encode(&buf, &uuid.key);
         @memcpy(&uuid.str, encoded);
 
         return uuid;
@@ -35,7 +35,7 @@ pub const UUID = struct {
         uuid.key = key;
 
         var buf: [STR_LENGTH]u8 = undefined;
-        const encoded = base64.Encoder.encode(&buf, &uuid.key);
+        const encoded = base32.Encoder.encode(&buf, &uuid.key);
         @memcpy(&uuid.str, encoded);
 
         return uuid;
@@ -46,7 +46,7 @@ pub const UUID = struct {
         uuid.str = str;
 
         var buf: [UUID_LENGTH]u8 = undefined;
-        const decoded = try base64.Decoder.decode(&buf, &uuid.str);
+        const decoded = try base32.Decoder.decode(&buf, &uuid.str);
         @memcpy(&uuid.key, decoded);
 
         return uuid;

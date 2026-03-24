@@ -12,6 +12,7 @@ pub const UserToken = struct {
 
 pub const Message = struct {
     id: usize,
+    account: User,
     created_at: []u8,
     content: []u8,
     pub fn getContent(self: *@This()) []const u8 {

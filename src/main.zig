@@ -13,13 +13,20 @@ pub fn main() !void {
         if (deinit_status == .leak) std.testing.expect(false) catch @panic("TEST FAIL");
     }
 
+    //var client_a = try Client.init(allocator, "alice", "y5Rql1ZvWYfqEwdPxout4pz1IUD1JamIaAiS4yTzZTg");
+    //defer client_a.deinit();
+    //var client_b = try Client.init(allocator, "bob", "r4wsr-ygHOtFztmpBpnrbkGX5a1YmnMOK4ggrGI3exQ");
+    //defer client_b.deinit();
+
+    //try client_b.dmInvite("alice", null);
+    //try client_a.acceptInvites();
+
     var client_a = try Client.fromFile(allocator, "alice");
     defer client_a.deinit();
     var client_b = try Client.fromFile(allocator, "bob");
     defer client_b.deinit();
 
-    //try client_b.dmInvite("alice");
-    //try client_a.acceptInvites();
+    try client_b.sendMessage(try client_b.getIdFromUsername("alice"), "hi alice");
 
     try client_b.saveToFile();
     try client_a.saveToFile();
