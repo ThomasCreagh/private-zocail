@@ -9,7 +9,6 @@ const Allocator = std.mem.Allocator;
 pub const Aes128Ocb = crypto.aead.aes_ocb.Aes128Ocb;
 pub const X25519 = crypto.dh.X25519;
 pub const HkdfSha256 = crypto.kdf.hkdf.HkdfSha256;
-pub const Ed25519 = crypto.sign.Ed25519;
 
 pub const UUID = struct {
     pub const UUID_LENGTH: usize = 16;
@@ -90,18 +89,8 @@ pub fn aesDecrypt(
 // === Key Exchange ===
 
 /// Generate new ephemeral keypair
-pub fn getEphemeralKeyPair() X25519.KeyPair {
+pub fn genKeyPair() X25519.KeyPair {
     return X25519.KeyPair.generate();
-}
-
-/// Translates Ed25519 public key to be used in X25519 key exchange
-pub fn getRecieversPublicKeyFromEd25519(public_key: Ed25519.PublicKey) ![X25519.public_length]u8 {
-    return X25519.publicKeyFromEd25519(public_key);
-}
-
-/// Deerive X25519 KeyPair from Ed25519 KeyPair
-pub fn deriveX25519KeyPair(key_pair: Ed25519.KeyPair) !X25519.KeyPair {
-    return try X25519.KeyPair.fromEd25519(key_pair);
 }
 
 /// Key derivation funciton which uses Sha256 to generate a 32 bytes key
@@ -133,25 +122,4 @@ pub fn deriveAesKey(
 ) error{IdentityElement}!void {
     const secret = try deriveKeyExchangeSecret(secret_key, public_key);
     keyDerivationFunction(out, secret, nonce, ctx);
-}
-
-// === Signatures ===
-
-/// Generate long term keypair for key exchange and signing
-pub fn generateSigningKeyPair() Ed25519.KeyPair {
-    return Ed25519.KeyPair.generate();
-}
-
-pub fn signMessage(key_pair: Ed25519.KeyPair, msg: []const u8) !Ed25519.Signature {
-    var noise: [Ed25519.noise_length]u8 = undefined;
-    random.bytes(&noise);
-    return try key_pair.sign(msg, noise);
-}
-
-pub fn verifyMessage(
-    sig: Ed25519.Signature,
-    msg: []const u8,
-    public_key: Ed25519.PublicKey,
-) Ed25519.Signature.VerifyError!void {
-    try sig.verify(msg, public_key);
 }

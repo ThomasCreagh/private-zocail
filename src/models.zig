@@ -28,10 +28,9 @@ pub const User = struct {
     username: []u8,
     created_at: []u8,
     note: []u8,
-    pub fn getPublicKey(self: *@This(), decoded_buf: *[crypto.Ed25519.PublicKey.encoded_length]u8) !crypto.Ed25519.PublicKey {
+    pub fn getPublicKey(self: *@This(), decoded_buf: *[crypto.X25519.public_length]u8) !void {
         const eom = indexOf(u8, self.note, "</p>") orelse unreachable;
         try base32.Decoder.decode(decoded_buf, self.note[3..eom]);
-        return try crypto.Ed25519.PublicKey.fromBytes(decoded_buf.*);
     }
 };
 
@@ -42,7 +41,6 @@ pub const MessageLabel = enum {
     dm_invite,
     group_message,
     group_invite,
-    group_members,
 };
 
 pub const DmMessage = struct {
@@ -81,9 +79,9 @@ pub const GroupMessage = struct {
         tag: [crypto.Aes128Ocb.tag_length]u8 = undefined,
         nonce: [crypto.Aes128Ocb.nonce_length]u8 = undefined,
         encrypted: ?[]u8 = null,
-        label: MessageLabel = .group_message,
     };
     pub const Secret = struct {
+        label: MessageLabel = .group_message,
         message: []const u8,
     };
 };
@@ -99,21 +97,8 @@ pub const GroupInvite = struct {
     pub const Secret = struct {
         label: MessageLabel = .group_invite,
         key: crypto.AesKey,
-    };
-};
-
-pub const GroupMembers = struct {
-    base: BaseMethods(GroupMembers) = .{},
-
-    pub const Encrypted = struct {
-        tag: [crypto.Aes128Ocb.tag_length]u8 = undefined,
-        nonce: [crypto.Aes128Ocb.nonce_length]u8 = undefined,
-        encrypted: ?[]u8 = null,
-        signature: crypto.Ed25519.Signature,
-    };
-    pub const Secret = struct {
-        label: MessageLabel = .group_members,
-        members: []const social.Username,
+        id: crypto.UUID,
+        name: []const u8,
     };
 };
 
@@ -192,7 +177,7 @@ pub fn BaseMethods(comptime T: type) type {
                 enc.nonce,
                 aes_key,
             ) catch |err| {
-                std.debug.print("couldnt decrypt {}", .{err});
+                std.debug.print("BaseMethods: couldnt decrypt {}\n", .{err});
                 return error.CouldNotDecryptAES;
             };
 

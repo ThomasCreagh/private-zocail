@@ -7,46 +7,18 @@ const social = @import("mastadon.zig");
 const base32 = @import("base32.zig").standard;
 
 const json = std.json;
+const dprint = std.debug.print;
 const Allocator = std.mem.Allocator;
 const HashMap = std.AutoArrayHashMap;
 const ArrayList = std.ArrayList;
 const BaseMethods = models.BaseMethods;
 
-pub const Member = struct {
-    username: social.Username,
-    admin: bool,
-};
-
-pub const Members = struct {
-    /// map from username to Member
-    list: ArrayList(Member),
-    signature: crypto.Ed25519.Signature,
-
-    pub fn init(signature: crypto.Ed25519.Signature) @This() {
-        return .{
-            .list = ArrayList(Member){},
-            .signature = signature,
-        };
-    }
-    pub fn deinit(self: *@This(), allocator: Allocator) void {
-        self.list.deinit(allocator);
-    }
-};
-
 pub const Group = struct {
     name: []const u8,
-    aes_key: crypto.AesKey,
-    members: Members,
+    key: crypto.AesKey,
 
-    pub fn init(aes_key: [crypto.Aes128Ocb.key_length]u8, allocator: Allocator) @This() {
-        return .{
-            .aes_key = aes_key,
-            .members = Members.init(allocator),
-        };
-    }
     pub fn deinit(self: *@This(), allocator: Allocator) void {
         allocator.free(self.name);
-        self.members.deinit(allocator);
     }
 };
 
@@ -62,17 +34,15 @@ pub const Dm = struct {
 pub const Client = struct {
     name: []const u8,
     access_token: []const u8,
-    /// Long term Ed25519 signing keys
-    lt_sign_keys: crypto.Ed25519.KeyPair,
-    /// Long term X25519 key exchange keys
-    lt_ke_keys: crypto.X25519.KeyPair,
+    /// Long term keys
+    long_term_keys: crypto.X25519.KeyPair,
     groups: HashMap(crypto.UUID, Group),
     dms: HashMap(crypto.UUID, Dm),
     allocator: Allocator,
     free_token: bool,
 
     pub fn init(allocator: Allocator, name: []const u8, access_token: ?[]const u8) !@This() {
-        const lt_sign_keys = crypto.generateSigningKeyPair();
+        const long_term_keys = crypto.genKeyPair();
         var token: []const u8 = undefined;
         var free_token: bool = false;
         if (access_token) |t| {
@@ -85,8 +55,7 @@ pub const Client = struct {
         var client = Client{
             .name = name,
             .access_token = token,
-            .lt_sign_keys = lt_sign_keys,
-            .lt_ke_keys = try crypto.deriveX25519KeyPair(lt_sign_keys),
+            .long_term_keys = long_term_keys,
             .groups = HashMap(crypto.UUID, Group).init(allocator),
             .dms = HashMap(crypto.UUID, Dm).init(allocator),
             .allocator = allocator,
@@ -97,12 +66,86 @@ pub const Client = struct {
         return client;
     }
     pub fn postPublicKey(self: *@This()) !void {
-        const keys = self.lt_sign_keys;
-        var key_buf: [base32.Encoder.calcSize(keys.public_key.bytes.len)]u8 = undefined;
-        const public_key = base32.Encoder.encode(&key_buf, &keys.public_key.toBytes());
+        const keys = self.long_term_keys;
+        var key_buf: [base32.Encoder.calcSize(keys.public_key.len)]u8 = undefined;
+        const public_key = base32.Encoder.encode(&key_buf, &keys.public_key);
         try social.setBio(self.allocator, self.access_token, public_key);
     }
-    pub fn acceptInvites(self: *@This()) !void {
+    pub fn createGroup(self: *@This(), group_name: []const u8) !crypto.UUID {
+        const id = crypto.UUID.init();
+        var aes_key: crypto.AesKey = undefined;
+        crypto.generateRandomAesKey(&aes_key);
+        try deallocPut(Group, self.allocator, &self.groups, id, Group{
+            .key = aes_key,
+            .name = try self.allocator.dupe(u8, group_name),
+        });
+        return id;
+    }
+    pub fn acceptGroupInvites(self: *@This()) !void {
+        var dm_it = self.dms.iterator();
+        while (dm_it.next()) |item| {
+            const id = item.key_ptr.*;
+            const dm = item.value_ptr;
+            const parsed_messages = try social.getMessages(self.allocator, self.access_token, id);
+            defer parsed_messages.deinit();
+
+            const messages = parsed_messages.value;
+            for (0..messages.len) |i| {
+                const encoded_message = messages[i].getContent();
+
+                var group_invite = try BaseMethods(models.GroupInvite).fromBase32(self.allocator, encoded_message);
+                defer group_invite.base.deinit(self.allocator);
+
+                const aes_key = dm.*.key;
+
+                group_invite.base.decrypt(self.allocator, aes_key) catch {
+                    dprint("acceptGroupInvites: couldnt decrypt message\n", .{});
+                    break;
+                };
+
+                const sec: *models.GroupInvite.Secret = &group_invite.base.secret.?;
+
+                if (sec.label == .group_invite) {
+                    dprint("acceptGroupInvite: group invite taken\n", .{});
+
+                    try deallocPut(Group, self.allocator, &self.groups, sec.id, Group{
+                        .key = sec.key,
+                        .name = try self.allocator.dupe(u8, sec.name),
+                    });
+                    break;
+                }
+            }
+        }
+    }
+    pub fn groupInvite(self: *@This(), user_id: crypto.UUID, group_id: crypto.UUID) !void {
+        const group: Group = self.groups.get(group_id).?;
+        var user_key: crypto.AesKey = undefined;
+        if (self.dms.get(user_id)) |dm| {
+            user_key = dm.key;
+        } else {
+            return error.UserIdNotFound;
+        }
+        var group_invite: models.GroupInvite = try BaseMethods(models.GroupInvite).fromEncryptedAndSecret(
+            self.allocator,
+            models.GroupInvite.Encrypted{},
+            models.GroupInvite.Secret{
+                .key = group.key,
+                .id = group_id,
+                .name = group.name,
+            },
+        );
+        defer group_invite.base.deinit(self.allocator);
+
+        try group_invite.base.encrypt(self.allocator, user_key);
+
+        const encode_buf = try self.allocator.alloc(u8, base32.Encoder.calcSize(group_invite.base.json_encrypted.?.written().len));
+        defer self.allocator.free(encode_buf);
+
+        const encoded_str = try group_invite.base.toBase32(encode_buf);
+
+        try social.sendMessage(self.allocator, self.access_token, encoded_str, user_id);
+    }
+    pub fn acceptDmInvites(self: *@This()) !void {
         const parsed_messages = try social.getMessages(self.allocator, self.access_token, null);
         defer parsed_messages.deinit();
 
@@ -119,58 +162,57 @@ pub const Client = struct {
 
             crypto.deriveAesKey(
                 &aes_key,
-                self.lt_ke_keys.secret_key,
+                self.long_term_keys.secret_key,
                 enc.ephemeral_key,
                 enc.nonce,
                 &enc.id.key,
             ) catch |err| {
-                std.debug.print("acceptInvite: couldnt get key {}\n", .{err});
+                dprint("acceptDmInvite: couldnt get key {}\n", .{err});
                 break;
             };
 
             dm_invite.base.decrypt(self.allocator, aes_key) catch {
-                std.debug.print("acceptInvite: couldnt decrypt message\n", .{});
+                dprint("acceptDmInvite: couldnt decrypt message\n", .{});
                 break;
             };
 
             if (dm_invite.base.secret.?.label != .dm_invite) {
-                std.debug.print("acceptInvite: wrong label\n", .{});
+                dprint("acceptDmInvite: wrong label\n", .{});
                 break;
             }
 
-            try self.dms.put(enc.id, Dm{
+            try deallocPut(Dm, self.allocator, &self.dms, enc.id, Dm{
                 .name = try self.allocator.dupe(u8, messages[i].account.username),
                 .key = aes_key,
             });
         }
     }
-    pub fn dmInvite(self: *@This(), username: social.Username, id: ?crypto.UUID) !void {
-        const uuid = id orelse crypto.UUID.init();
+    pub fn dmInvite(self: *@This(), username: social.Username) !crypto.UUID {
+        const id = crypto.UUID.init();
 
-        const ephemeral_keys = crypto.getEphemeralKeyPair();
+        const ephemeral_keys = crypto.genKeyPair();
 
         const parsed_user = try social.getUser(self.allocator, username);
         defer parsed_user.deinit();
 
         var user = parsed_user.value;
-        var decoded_buf: [crypto.Ed25519.PublicKey.encoded_length]u8 = undefined;
-        const decoded_key = try user.getPublicKey(&decoded_buf);
-        const reciever_public_key = try crypto.getRecieversPublicKeyFromEd25519(decoded_key);
+        var decoded_key: [crypto.X25519.public_length]u8 = undefined;
+        try user.getPublicKey(&decoded_key);
 
         var dm_invite: models.DmInvite = try BaseMethods(models.DmInvite).fromEncryptedAndSecret(
             self.allocator,
             models.DmInvite.Encrypted{
                 .ephemeral_key = ephemeral_keys.public_key,
-                .id = uuid,
+                .id = id,
             },
             models.DmInvite.Secret{},
         );
         defer dm_invite.base.deinit(self.allocator);
 
         var aes_key: crypto.AesKey = undefined;
-        try crypto.deriveAesKey(&aes_key, ephemeral_keys.secret_key, reciever_public_key, dm_invite.base.encrypted.?.nonce, &uuid.key);
+        try crypto.deriveAesKey(&aes_key, ephemeral_keys.secret_key, decoded_key, dm_invite.base.encrypted.?.nonce, &id.key);
 
-        try self.dms.put(uuid, Dm{
+        try deallocPut(Dm, self.allocator, &self.dms, id, Dm{
             .name = try self.allocator.dupe(u8, username),
             .key = aes_key,
         });
@@ -183,24 +225,32 @@ pub const Client = struct {
         const encoded_str = try dm_invite.base.toBase32(encode_buf);
 
         try social.sendMessage(self.allocator, self.access_token, encoded_str, null);
+        return id;
     }
-    pub fn getIdFromUsername(self: *@This(), username: []const u8) !crypto.UUID {
+    pub fn getUserIdFromName(self: *@This(), name: []const u8) !crypto.UUID {
         var it = self.dms.iterator();
         while (it.next()) |dm| {
-            if (std.mem.eql(u8, dm.value_ptr.*.name, username)) {
+            if (std.mem.eql(u8, dm.value_ptr.*.name, name)) {
                 return dm.key_ptr.*;
             }
         }
-        const uuid = crypto.UUID.init();
-        try self.dmInvite(username, uuid);
-        return uuid;
+        return self.dmInvite(name);
+    }
+    pub fn getGroupIdFromName(self: *@This(), name: []const u8) !crypto.UUID {
+        var it = self.groups.iterator();
+        while (it.next()) |group| {
+            if (std.mem.eql(u8, group.value_ptr.*.name, name)) {
+                return group.key_ptr.*;
+            }
+        }
+        return error.GroupNotFound;
     }
     pub fn sendMessage(self: *@This(), id: crypto.UUID, message: []const u8) !void {
         var aes_key: crypto.AesKey = undefined;
         if (self.dms.get(id)) |x| {
             aes_key = x.key;
         } else {
-            return error.IdNotInMap;
+            return error.IdNotFound;
         }
 
         var dm_message: models.DmMessage = try BaseMethods(models.DmMessage).fromEncryptedAndSecret(
@@ -233,7 +283,7 @@ pub const Client = struct {
         defer parsed_messages.deinit();
         const messages: []models.Message = parsed_messages.value;
 
-        std.debug.print("ID: {s}\n", .{id.str});
+        dprint("ID: {s}\n", .{id.str});
         for (0..messages.len) |i| {
             const encoded_message = messages[i].getContent();
 
@@ -241,16 +291,16 @@ pub const Client = struct {
             defer dm_message.base.deinit(self.allocator);
 
             dm_message.base.decrypt(self.allocator, aes_key) catch {
-                std.debug.print("recieveMessage: couldnt decrypt message\n", .{});
+                dprint("recieveMessage: couldnt decrypt message\n", .{});
                 break;
             };
 
             if (dm_message.base.secret.?.label != .dm_message) {
-                std.debug.print("acceptInvite: wrong label\n", .{});
+                dprint("recieveMessage: wrong label\n", .{});
                 break;
             }
 
-            std.debug.print("recieveMessage: Message {} from {s}:\n\t{s}\n", .{
+            dprint("recieveMessage: Message {} from {s}:\n\t{s}\n", .{
                 i,
                 messages[i].account.username,
                 dm_message.base.secret.?.message,
@@ -261,8 +311,7 @@ pub const Client = struct {
         var client_save = ClientSave{
             .name = self.name,
             .access_token = self.access_token,
-            .lt_sign_keys = self.lt_sign_keys,
-            .lt_ke_keys = self.lt_ke_keys,
+            .long_term_keys = self.long_term_keys,
         };
         var group_array = try client_save.groupMapToArray(self.allocator, self.groups);
         defer group_array.deinit(self.allocator);
@@ -279,14 +328,14 @@ pub const Client = struct {
         defer self.allocator.free(path);
 
         const file = std.fs.cwd().createFile(path, .{}) catch |err| {
-            std.debug.print("saveToFile: file error: {}\n", .{err});
+            dprint("saveToFile: file error: {}\n", .{err});
             return err;
         };
         defer file.close();
 
         try file.writeAll(string.written());
 
-        std.debug.print("saveToFile: file written with: {s}\n", .{string.written()});
+        dprint("saveToFile: file written with: {s}\n", .{string.written()});
     }
     pub fn fromFile(allocator: Allocator, name: []const u8) !@This() {
         const path = try std.fmt.allocPrint(allocator, "data/{s}.json", .{name});
@@ -310,8 +359,7 @@ pub const Client = struct {
         const client = Client{
             .name = name,
             .access_token = try allocator.dupe(u8, saved_client.access_token),
-            .lt_sign_keys = saved_client.lt_sign_keys,
-            .lt_ke_keys = saved_client.lt_ke_keys,
+            .long_term_keys = saved_client.long_term_keys,
             .groups = try saved_client.arrayToGroupMap(allocator),
             .dms = try saved_client.arrayToDmMap(allocator),
             .allocator = allocator,
@@ -341,16 +389,14 @@ pub const GroupPair = struct {
 
 pub const DmPair = struct {
     id: crypto.UUID,
-    key: Dm,
+    dm: Dm,
 };
 
 pub const ClientSave = struct {
     name: []const u8,
     access_token: []const u8,
-    /// Long term Ed25519 signing keys
-    lt_sign_keys: crypto.Ed25519.KeyPair,
-    /// Long term X25519 key exchange keys
-    lt_ke_keys: crypto.X25519.KeyPair,
+    /// Long term keys
+    long_term_keys: crypto.X25519.KeyPair,
     groups: []const GroupPair = undefined,
     dms: []const DmPair = undefined,
 
@@ -367,12 +413,10 @@ pub const ClientSave = struct {
         return array;
     }
     pub fn arrayToGroupMap(self: *@This(), allocator: Allocator) !HashMap(crypto.UUID, Group) {
-        // This is definetly super broken.
         var hashmap = HashMap(crypto.UUID, Group).init(allocator);
         for (0..self.groups.len) |i| {
-            try hashmap.put(self.groups[i].id, Group{
-                .aes_key = self.groups[i].group.aes_key,
-                .members = self.groups[i].group.members,
+            try deallocPut(Group, allocator, &hashmap, self.groups[i].id, Group{
+                .key = self.groups[i].group.key,
                 .name = try allocator.dupe(u8, self.groups[i].group.name),
             });
         }
@@ -384,7 +428,7 @@ pub const ClientSave = struct {
         while (it.next()) |group| {
             try array.append(allocator, .{
                 .id = group.key_ptr.*,
-                .key = group.value_ptr.*,
+                .dm = group.value_ptr.*,
             });
         }
         self.dms = array.items;
@@ -393,11 +437,18 @@ pub const ClientSave = struct {
     pub fn arrayToDmMap(self: *@This(), allocator: Allocator) !HashMap(crypto.UUID, Dm) {
         var hashmap = HashMap(crypto.UUID, Dm).init(allocator);
         for (0..self.dms.len) |i| {
-            try hashmap.put(self.dms[i].id, Dm{
-                .name = try allocator.dupe(u8, self.dms[i].key.name),
-                .key = self.dms[i].key.key,
+            try deallocPut(Dm, allocator, &hashmap, self.dms[i].id, Dm{
+                .name = try allocator.dupe(u8, self.dms[i].dm.name),
+                .key = self.dms[i].dm.key,
             });
         }
         return hashmap;
     }
 };
+
+fn deallocPut(comptime T: type, allocator: Allocator, map: *HashMap(crypto.UUID, T), key: crypto.UUID, val: T) !void {
+    if (try map.fetchPut(key, val)) |old| {
+        var old_val = old.value;
+        old_val.deinit(allocator);
+    }
+}

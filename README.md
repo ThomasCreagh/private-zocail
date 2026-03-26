@@ -8,3 +8,7 @@ Not in scope:
 - security on client device
 - public keys with valid certs etc
 - was planning to have admins to control members who can join but everyone can leak the key so I think just give the key to all and trust them all. If people decide to remove someone just invite others to a new group.
+
+Future could-do:
+- Make it easy to create a group without one memeber
+
